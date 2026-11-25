@@ -1,7 +1,7 @@
 export const blViewTemplate = `
 <section class="panel">
   <h2>提单册</h2>
-  <p class="hint">到港提单须先登记，过磅票引用提单号。</p>
+  <p class="hint">到港提单须先登记，过磅票引用提单号。海关回执列单列：无回执只到影子，正式完成须回执到达。</p>
   <div class="form-row">
     <div><label>提单号</label><input v-model="blForm.bl_code"/></div>
     <div><label>货描</label><input v-model="blForm.cargo_desc"/></div>
@@ -13,7 +13,7 @@ export const blViewTemplate = `
     <button class="secondary" @click="refresh">刷新</button>
   </div>
   <table class="data-table">
-    <thead><tr><th>提单</th><th>货描</th><th>申报吨</th><th>航次</th><th>状态</th></tr></thead>
+    <thead><tr><th>提单</th><th>货描</th><th>申报吨</th><th>航次</th><th>状态</th><th>海关回执</th><th>回执号</th></tr></thead>
     <tbody>
       <tr v-for="b in blList" :key="b.id">
         <td>{{ b.bl_code }}</td>
@@ -21,6 +21,8 @@ export const blViewTemplate = `
         <td>{{ b.declared_gross_t }}</td>
         <td>{{ b.vessel_voyage }}</td>
         <td>{{ b.status }}</td>
+        <td><span class="badge" :class="customsBadge(b.customs_status)">{{ customsLabel(b.customs_status) }}</span></td>
+        <td class="mono">{{ b.customs_receipt_ref || '空' }}</td>
       </tr>
     </tbody>
   </table>

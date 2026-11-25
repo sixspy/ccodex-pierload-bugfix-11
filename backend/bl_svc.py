@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user, require_writer
+from customs_receipt import receipt_state
 from db import connect, now_iso, write_audit
 from models import BlIn
 
@@ -17,7 +18,15 @@ def list_bl(authorization: AuthHeader = None):
         rows = conn.execute(
             "SELECT * FROM bl_manifests ORDER BY bl_code"
         ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+        items = []
+        for r in rows:
+            d = dict(r)
+            state = receipt_state(conn, d["bl_code"])
+            d["customs_status"] = state["status"]
+            d["customs_official"] = state["official"]
+            d["customs_receipt_ok"] = state["receipt_ok"]
+            items.append(d)
+        return {"items": items}
 
 
 @router.get("/api/bl/{bl_code}")
@@ -34,7 +43,11 @@ def get_bl(bl_code: str, authorization: AuthHeader = None):
                WHERE bl_ref=? ORDER BY id DESC""",
             (bl_code,),
         ).fetchall()
-        return {"bl": dict(row), "tickets": [dict(t) for t in tickets]}
+        return {
+            "bl": dict(row),
+            "customs": receipt_state(conn, bl_code),
+            "tickets": [dict(t) for t in tickets],
+        }
 
 
 @router.post("/api/bl")
@@ -48,13 +61,14 @@ def create_bl(body: BlIn, authorization: AuthHeader = None):
         now = now_iso()
         cur = conn.execute(
             """INSERT INTO bl_manifests(bl_code,cargo_desc,declared_gross_t,vessel_voyage,
-               status,created_at) VALUES (?,?,?,?,?,?)""",
+               status,customs_status,created_at) VALUES (?,?,?,?,?,?,?)""",
             (
                 body.bl_code,
                 body.cargo_desc,
                 body.declared_gross_t,
                 body.vessel_voyage,
                 "在港",
+                "未申报",
                 now,
             ),
         )

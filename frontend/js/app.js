@@ -66,6 +66,7 @@ createApp({
       from_ticket_id: 1, to_ticket_id: 2, edge_type: "二次过磅", detail: "驳载后重检",
     });
     const customsForm = ref({ bl_code: "BL-2026-0101", row_count: 1 });
+    const receiptForm = ref({ job_id: 0, receipt_ref: "" });
     const craneForm = ref({ berth_slot: "B-09", ticket_id: null });
 
     function logout() {
@@ -101,6 +102,19 @@ createApp({
       if (!t) return "";
       const s = String(t);
       return s.slice(0, 52) + (s.length > 52 ? "…" : "");
+    }
+    function customsBadge(s) {
+      if (!s) return "muted";
+      if (s === "已完成") return "pass";
+      if (s === "影子待回执") return "warn";
+      if (s === "已入队") return "muted";
+      return "fail";
+    }
+    function customsLabel(s) {
+      return s === "已完成" ? "正式完成" : s === "影子待回执" ? "影子待回执" : (s || "未申报");
+    }
+    function lastJobFor(blCode) {
+      return customsJobs.value.find((j) => j.bl_code === blCode) || null;
     }
     function clearFlash() { actionErr.value = ""; actionOk.value = ""; }
     function flashOk(m) { actionOk.value = m; actionErr.value = ""; }
@@ -206,8 +220,10 @@ createApp({
     async function releaseGate() {
       clearFlash();
       try {
-        await api.releaseGate(gateForm.value);
-        flashOk("已放行"); await refresh();
+        const r = await api.releaseGate(gateForm.value);
+        if (r.customs_complete) flashOk(`已放行 · 海关回执已到，正式完成`);
+        else flashOk(`已放行 · 海关回执缺失，仅影子待回执（未计入正式册）`);
+        await refresh();
       } catch (e) { flashErr(e); }
     }
     async function createSeal() {
@@ -246,8 +262,28 @@ createApp({
     }
     async function enqueueCustoms() {
       clearFlash();
-      try { await api.customsStub(customsForm.value); flashOk("海关空桩入队"); await refresh(); }
-      catch (e) { flashErr(e); }
+      try {
+        const r = await api.customsStub(customsForm.value);
+        flashOk(
+          r.receipt_ok
+            ? "海关空桩入队：回执已在列"
+            : "海关空桩入队：回执未到，不写正式完成"
+        );
+        receiptForm.value.job_id = r.id;
+        await refresh();
+      } catch (e) { flashErr(e); }
+    }
+    async function submitReceipt() {
+      clearFlash();
+      try {
+        const r = await api.customsReceipt(receiptForm.value);
+        flashOk(`回执已入列：${r.bl_code} → ${customsLabel(r.status)}`);
+        receiptForm.value.receipt_ref = "";
+        await refresh();
+      } catch (e) { flashErr(e); }
+    }
+    function pickJob(job) {
+      receiptForm.value.job_id = job.id;
     }
     async function enqueueCrane() {
       clearFlash();
@@ -265,13 +301,14 @@ createApp({
       lineageEdges, customsJobs, craneJobs, bridgeDetail, ticketDetail,
       reconOne, reconAllItems, proofOne, reconCode, proofCode,
       bridgeForm, laneForm, ticketForm, overloadOpenForm, gateForm, sealForm,
-      blForm, lineageForm, customsForm, craneForm,
+      blForm, lineageForm, customsForm, receiptForm, craneForm,
       adjudicableTickets, releasableTickets, sealableTickets,
       login, logout, refresh,
-      fmtT, ticketClass, shortText,
+      fmtT, ticketClass, shortText, customsBadge, customsLabel, lastJobFor,
       createBridge, loadBridgeDetail, createLane, createTicket, loadTicketDetail, selectTicket,
       openOverload, closeOverload, releaseGate, createSeal, registerBl, addLineage,
-      loadReconcile, loadAllReconcile, loadProof, enqueueCustoms, enqueueCrane,
+      loadReconcile, loadAllReconcile, loadProof, enqueueCustoms, submitReceipt,
+      pickJob, enqueueCrane,
     };
   },
   template: `

@@ -1,9 +1,10 @@
-"""提单册与过磅票对账证明。"""
+"""提单册与过磅票对账证明（读空桩回执列，影子不得结案）。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user
+from customs_receipt import receipt_state
 from validators import validate_bl_match
 
 router = APIRouter(tags=["reconcile"])
@@ -47,6 +48,7 @@ def _reconcile_bl(conn, bl_code: str) -> dict:
            WHERE bl_ref=? AND status NOT IN ('作废')""",
         (bl_code,),
     ).fetchall()
+    customs = receipt_state(conn, bl_code)
     if not tickets:
         return {
             "bl_code": bl_code,
@@ -55,6 +57,9 @@ def _reconcile_bl(conn, bl_code: str) -> dict:
             "balanced": False,
             "reason": "无过磅票",
             "tickets": [],
+            "customs": customs,
+            "settled": False,
+            "proof_ready": False,
         }
     ticket_sum = round(sum(float(t["gross_t"]) for t in tickets), 3)
     declared = float(bl["declared_gross_t"])
@@ -65,14 +70,28 @@ def _reconcile_bl(conn, bl_code: str) -> dict:
            WHERE t.bl_ref=?""",
         (bl_code,),
     ).fetchall()
-    proof_ok = matched and len(seal_rows) >= 1
+    # 账实平 + 有闸代快照还不够：回执未到只能影子，不得结案。
+    proof_ok = bool(matched and len(seal_rows) >= 1 and customs["official"])
+    if customs["official"]:
+        reason = "账实已平，回执已到，可结案"
+    elif customs["shadow"]:
+        reason = "回执缺失：影子完成不得结案"
+    elif customs["receipt_missing"] and matched:
+        reason = "回执缺失：空桩未回执，不得结案"
+    elif not matched:
+        reason = "账实偏差待查"
+    else:
+        reason = "待补证明"
     return {
         "bl_code": bl_code,
         "declared_gross_t": declared,
         "ticket_sum_t": ticket_sum,
         "balanced": matched,
         "proof_ready": proof_ok,
+        "settled": proof_ok,
         "seal_count": len(seal_rows),
+        "customs": customs,
+        "reason": reason,
         "tickets": [dict(t) for t in tickets],
         "seals": [dict(s) for s in seal_rows],
     }
@@ -104,6 +123,7 @@ def proof_ticket(ticket_code: str, authorization: AuthHeader = None):
             """SELECT id FROM overload_holds WHERE ticket_id=? AND status='开放'""",
             (ticket["id"],),
         ).fetchone()
+        customs = receipt_state(conn, ticket["bl_ref"])
         manifest_match = False
         if seal and bl:
             manifest_match = validate_bl_match(
@@ -118,7 +138,14 @@ def proof_ticket(ticket_code: str, authorization: AuthHeader = None):
             "seal_generation": seal["ticket_generation"] if seal else None,
             "released": release is not None,
             "overload_closed": overload_closed,
+            "customs_official": customs["official"],
+            "customs_status": customs["status"],
+            "customs_receipt_ok": customs["receipt_ok"],
+            # 回执未正式完成则整票不连贯：影子完成不能作为结案证明。
             "coherent": bool(
-                manifest_match and overload_closed and (seal or release)
+                manifest_match
+                and overload_closed
+                and (seal or release)
+                and customs["official"]
             ),
         }

@@ -132,6 +132,10 @@ CREATE TABLE IF NOT EXISTS bl_manifests(
   declared_gross_t REAL NOT NULL,
   vessel_voyage TEXT NOT NULL,
   status TEXT NOT NULL,
+  customs_status TEXT NOT NULL DEFAULT '未申报',
+  customs_receipt_ref TEXT,
+  customs_completed_at TEXT,
+  customs_shadow_at TEXT,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS axle_lineage(
@@ -171,6 +175,10 @@ CREATE TABLE IF NOT EXISTS customs_stub_jobs(
   mode TEXT NOT NULL,
   status TEXT NOT NULL,
   detail TEXT,
+  receipt_ref TEXT,
+  receipt_at TEXT,
+  shadow_completed_at TEXT,
+  completed_at TEXT,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS crane_plan_jobs(
@@ -341,13 +349,14 @@ def seed_bl_manifests(conn: sqlite3.Connection) -> None:
             continue
         conn.execute(
             """INSERT INTO bl_manifests(bl_code,cargo_desc,declared_gross_t,vessel_voyage,
-               status,created_at) VALUES (?,?,?,?,?,?)""",
+               status,customs_status,created_at) VALUES (?,?,?,?,?,?,?)""",
             (
                 row["bl_code"],
                 row["cargo_desc"],
                 float(row["declared_gross_t"]),
                 row["vessel_voyage"],
                 row.get("status", "在港"),
+                "未申报",
                 row.get("created_at", now_iso()),
             ),
         )
@@ -436,9 +445,30 @@ def seed_lineage_samples(conn: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """旧库补列：回执口径列必须存在，否则完成口无从读回执。"""
+    _ensure_column(conn, "customs_stub_jobs", "receipt_ref", "TEXT")
+    _ensure_column(conn, "customs_stub_jobs", "receipt_at", "TEXT")
+    _ensure_column(conn, "customs_stub_jobs", "shadow_completed_at", "TEXT")
+    _ensure_column(conn, "customs_stub_jobs", "completed_at", "TEXT")
+    _ensure_column(
+        conn, "bl_manifests", "customs_status", "TEXT NOT NULL DEFAULT '未申报'"
+    )
+    _ensure_column(conn, "bl_manifests", "customs_receipt_ref", "TEXT")
+    _ensure_column(conn, "bl_manifests", "customs_completed_at", "TEXT")
+    _ensure_column(conn, "bl_manifests", "customs_shadow_at", "TEXT")
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        migrate(conn)
         seed_users(conn)
         seed_bridges(conn)
         seed_lanes(conn)
@@ -477,6 +507,20 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         """SELECT COUNT(*) c FROM weigh_tickets
            WHERE status='旁路挂起'"""
     ).fetchone()["c"]
+    # 五页同源：总览直接读正式册回执口径，不自行推断。
+    customs_official = conn.execute(
+        """SELECT COUNT(*) c FROM bl_manifests
+           WHERE customs_status='已完成'
+             AND TRIM(COALESCE(customs_receipt_ref,''))<>''"""
+    ).fetchone()["c"]
+    customs_shadow = conn.execute(
+        "SELECT COUNT(*) c FROM bl_manifests WHERE customs_status='影子待回执'"
+    ).fetchone()["c"]
+    customs_pending = conn.execute(
+        """SELECT COUNT(*) c FROM bl_manifests
+           WHERE customs_status<>'已完成'
+              OR TRIM(COALESCE(customs_receipt_ref,''))=''"""
+    ).fetchone()["c"]
     return {
         "bridges": bridges,
         "lanes": lanes,
@@ -486,6 +530,9 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         "gate_seals": sealed,
         "bl_manifests": bl_count,
         "side_pending": pending,
+        "customs_official": customs_official,
+        "customs_shadow": customs_shadow,
+        "customs_pending": customs_pending,
         "stubs": stubs,
         "meta": PRODUCT_META,
     }

@@ -211,13 +211,19 @@ textarea { min-height: 80px; font-family: var(--font-mono); font-size: 12px; }
 input:focus, select:focus, textarea:focus {
   outline: 1px solid var(--amber); outline-offset: 1px;
 }
+
+/* 对账页辅助：偏差行高亮 */
+.recon-warn { color: var(--warn); font-weight: 600; }
+.recon-ok { color: var(--ok); }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.harbor-main .panel + .panel { margin-top: 14px; }
 """
 
 DASH = r"""
 export const dashboardViewTemplate = `
 <section class="panel">
   <h2>闸口总览</h2>
-  <p class="hint">过磅票入闸后裁定超重才放行，驳回进旁路挂起；闸代快照须与提单册对账。</p>
+  <p class="hint">过磅票入闸后裁定超重才放行，驳回进旁路挂起；闸代快照须与提单册对账。海关完成只认回执到达后的正式册，影子待回执不计完成。</p>
   <div class="hero-cards">
     <div class="hero-card"><span class="t">地磅桥</span><div class="n">{{ dash.bridges ?? '—' }}</div></div>
     <div class="hero-card"><span class="t">开放超重</span><div class="n">{{ dash.open_overloads ?? '—' }}</div></div>
@@ -226,9 +232,15 @@ export const dashboardViewTemplate = `
     <div class="hero-card"><span class="t">已放行</span><div class="n">{{ dash.gate_releases ?? '—' }}</div></div>
     <div class="hero-card"><span class="t">已封闸</span><div class="n">{{ dash.gate_seals ?? '—' }}</div></div>
   </div>
+  <div class="hero-cards" style="margin-top:12px">
+    <div class="hero-card"><span class="t">海关正式完成</span><div class="n">{{ dash.customs_official ?? '—' }}</div></div>
+    <div class="hero-card"><span class="t">影子待回执</span><div class="n">{{ dash.customs_shadow ?? '—' }}</div></div>
+    <div class="hero-card"><span class="t">未正式完成</span><div class="n">{{ dash.customs_pending ?? '—' }}</div></div>
+  </div>
   <p class="hint" style="margin-top:16px">骨架：{{ dash.meta && dash.meta.skeleton }}</p>
 </section>
-`;"""
+`;
+"""
 
 BRIDGES = r"""
 export const bridgesViewTemplate = `
@@ -351,7 +363,7 @@ GATE = r"""
 export const gateViewTemplate = `
 <section class="panel">
   <h2>闸口放行</h2>
-  <p class="hint">须票态已裁定且无开放超重挂起；旁路未闭环不得抬杆。</p>
+  <p class="hint">须票态已裁定且无开放超重挂起；旁路未闭环不得抬杆。放行完成态须读海关空桩回执列：回执缺失只记影子待回执，不写正式完成。</p>
   <div class="form-row">
     <div><label>过磅票</label>
       <select v-model.number="gateForm.ticket_id">
@@ -365,19 +377,21 @@ export const gateViewTemplate = `
     <button class="secondary" @click="refresh">刷新</button>
   </div>
   <table class="data-table">
-    <thead><tr><th>放行号</th><th>票号</th><th>车道</th><th>值班员</th><th>时间</th></tr></thead>
+    <thead><tr><th>放行号</th><th>票号</th><th>车道</th><th>值班员</th><th>海关回执</th><th>时间</th></tr></thead>
     <tbody>
       <tr v-for="g in gateReleases" :key="g.id">
         <td>{{ g.release_ref }}</td>
         <td>{{ g.ticket_code }}</td>
         <td>{{ g.lane_code }}</td>
         <td>{{ g.officer }}</td>
+        <td><span class="badge" :class="customsBadge(g.customs_status)">{{ customsLabel(g.customs_status) }}</span></td>
         <td>{{ g.released_at }}</td>
       </tr>
     </tbody>
   </table>
 </section>
-`;"""
+`;
+"""
 
 SEAL = r"""
 export const sealViewTemplate = `
@@ -415,7 +429,7 @@ BL = r"""
 export const blViewTemplate = `
 <section class="panel">
   <h2>提单册</h2>
-  <p class="hint">到港提单须先登记，过磅票引用提单号。</p>
+  <p class="hint">到港提单须先登记，过磅票引用提单号。海关回执列单列：无回执只到影子，正式完成须回执到达。</p>
   <div class="form-row">
     <div><label>提单号</label><input v-model="blForm.bl_code"/></div>
     <div><label>货描</label><input v-model="blForm.cargo_desc"/></div>
@@ -427,7 +441,7 @@ export const blViewTemplate = `
     <button class="secondary" @click="refresh">刷新</button>
   </div>
   <table class="data-table">
-    <thead><tr><th>提单</th><th>货描</th><th>申报吨</th><th>航次</th><th>状态</th></tr></thead>
+    <thead><tr><th>提单</th><th>货描</th><th>申报吨</th><th>航次</th><th>状态</th><th>海关回执</th><th>回执号</th></tr></thead>
     <tbody>
       <tr v-for="b in blList" :key="b.id">
         <td>{{ b.bl_code }}</td>
@@ -435,11 +449,14 @@ export const blViewTemplate = `
         <td>{{ b.declared_gross_t }}</td>
         <td>{{ b.vessel_voyage }}</td>
         <td>{{ b.status }}</td>
+        <td><span class="badge" :class="customsBadge(b.customs_status)">{{ customsLabel(b.customs_status) }}</span></td>
+        <td class="mono">{{ b.customs_receipt_ref || '空' }}</td>
       </tr>
     </tbody>
   </table>
 </section>
-`;"""
+`;
+"""
 
 LINEAGE = r"""
 export const lineageViewTemplate = `
@@ -484,7 +501,7 @@ export const reconcileViewTemplate = `
 <section class="grid-2">
   <section class="panel">
     <h2>提单对账</h2>
-    <p class="hint">汇总过磅毛重与提单申报吨比对。</p>
+    <p class="hint">汇总过磅毛重与提单申报吨比对。账实平不等于结案：回执未到只能影子，不得当结案。</p>
     <div class="form-row">
       <div><label>提单号</label><input v-model="reconCode"/></div>
     </div>
@@ -495,43 +512,71 @@ export const reconcileViewTemplate = `
     <div v-if="reconOne" class="detail-box">
       <p>申报 {{ reconOne.declared_gross_t }}t · 过磅合计 {{ reconOne.ticket_sum_t }}t</p>
       <p :class="reconOne.balanced ? 'ok' : 'bad'">{{ reconOne.balanced ? '账实平衡' : '偏差待查' }}</p>
-      <p>快照数 {{ reconOne.seal_count }} · 可出证明 {{ reconOne.proof_ready ? '是' : '否' }}</p>
+      <p>海关回执
+        <span class="badge" :class="customsBadge(reconOne.customs && reconOne.customs.status)">
+          {{ customsLabel(reconOne.customs && reconOne.customs.status) }}
+        </span>
+        · 回执号 {{ (reconOne.customs && reconOne.customs.receipt_ref) || '空' }}
+      </p>
+      <p>快照数 {{ reconOne.seal_count }} · 可出证明 {{ reconOne.proof_ready ? '是' : '否' }} · 可结案 {{ reconOne.settled ? '是' : '否' }}</p>
+      <p class="hint">{{ reconOne.reason }}</p>
     </div>
     <ul v-if="reconAllItems.length">
-      <li v-for="r in reconAllItems" :key="r.bl_code">{{ r.bl_code }} · {{ r.balanced ? '平' : '偏' }}</li>
+      <li v-for="r in reconAllItems" :key="r.bl_code">{{ r.bl_code }} · {{ r.balanced ? '平' : '偏' }} · {{ customsLabel(r.customs && r.customs.status) }}</li>
     </ul>
   </section>
   <section class="panel">
     <h2>单票证明</h2>
     <div class="form-row"><div><label>票号</label><input v-model="proofCode"/></div></div>
-    <motion class="actions"><button @click="loadProof">拉证明</button></motion>
+    <div class="actions"><button @click="loadProof">拉证明</button></div>
     <div v-if="proofOne" class="detail-box">
       <p>提单匹配 {{ proofOne.manifest_matches_bl ? '是' : '否' }}</p>
       <p>超重闭环 {{ proofOne.overload_closed ? '是' : '否' }}</p>
       <p>已放行 {{ proofOne.released ? '是' : '否' }}</p>
+      <p>海关回执
+        <span class="badge" :class="customsBadge(proofOne.customs_status)">
+          {{ customsLabel(proofOne.customs_status) }}
+        </span>
+      </p>
       <p>一致 {{ proofOne.coherent ? '是' : '否' }}</p>
     </div>
   </section>
 </section>
-`;"""
+`;
+"""
 
 STUBS = r"""
 export const stubsViewTemplate = `
 <section class="grid-2">
   <section class="panel">
     <h2>海关申报空桩</h2>
-    <p class="hint">接口已挂载，回执未对接。</p>
+    <p class="hint">入队只到「已入队」。回执列为空即不得写正式完成；结算只认回执到达后的原子晋升，影子待回执不得当结案。</p>
     <div class="form-row">
       <div><label>提单</label><input v-model="customsForm.bl_code"/></div>
       <div><label>行数</label><input v-model.number="customsForm.row_count" type="number"/></div>
     </div>
     <div class="actions"><button @click="enqueueCustoms">入队</button></div>
+    <div class="form-row" style="margin-top:12px">
+      <div><label>回执号（到达后填）</label><input v-model="receiptForm.receipt_ref" placeholder="CUS-..."/></div>
+      <div><label>任务 ID</label><input v-model.number="receiptForm.job_id" type="number"/></div>
+    </div>
+    <div class="actions"><button @click="submitReceipt">登记回执</button></div>
     <table class="data-table compact">
-      <tr v-for="j in customsJobs" :key="j.id"><td>{{ j.bl_code }}</td><td>{{ j.status }}</td></tr>
+      <thead><tr><th>提单</th><th>状态</th><th>回执</th><th>影子</th><th></th></tr></thead>
+      <tbody>
+        <tr v-for="j in customsJobs" :key="j.id">
+          <td>{{ j.bl_code }}</td>
+          <td><span class="badge" :class="customsBadge(j.status)">{{ customsLabel(j.status) }}</span></td>
+          <td class="mono">{{ j.receipt_ref || '空' }}</td>
+          <td class="mono">{{ j.shadow_completed_at ? '有' : '无' }}</td>
+          <td><button class="mini-btn" @click="pickJob(j)">选</button></td>
+        </tr>
+      </tbody>
     </table>
   </section>
   <section class="panel">
     <h2>岸桥计划空桩</h2>
+    <p class="hint">岸桥空桩与海关回执口径分开；本页不参与完成判定。</p>
     <div class="form-row">
       <div><label>泊位</label><input v-model="craneForm.berth_slot"/></div>
       <div><label>票ID(可空)</label><input v-model.number="craneForm.ticket_id" type="number"/></div>
@@ -542,7 +587,8 @@ export const stubsViewTemplate = `
     </table>
   </section>
 </section>
-`;"""
+`;
+"""
 
 API_JS = r"""
 export function createApi(getToken, onUnauthorized) {
@@ -587,7 +633,9 @@ export function createApi(getToken, onUnauthorized) {
     reconcileOne: (code) => req(`/api/reconcile/${encodeURIComponent(code)}`),
     proofTicket: (code) => req(`/api/proof/ticket/${encodeURIComponent(code)}`),
     customsJobs: () => req("/api/customs/jobs"),
+    customsState: (blCode) => req(`/api/customs/state/${encodeURIComponent(blCode)}`),
     customsStub: (d) => req("/api/customs-stub", { method: "POST", body: JSON.stringify(d) }),
+    customsReceipt: (d) => req("/api/customs/receipt", { method: "POST", body: JSON.stringify(d) }),
     craneJobs: () => req("/api/crane/jobs"),
     craneStub: (d) => req("/api/crane-stub", { method: "POST", body: JSON.stringify(d) }),
     contention: () => req("/api/contention"),
@@ -664,6 +712,7 @@ createApp({
       from_ticket_id: 1, to_ticket_id: 2, edge_type: "二次过磅", detail: "驳载后重检",
     });
     const customsForm = ref({ bl_code: "BL-2026-0101", row_count: 1 });
+    const receiptForm = ref({ job_id: 0, receipt_ref: "" });
     const craneForm = ref({ berth_slot: "B-09", ticket_id: null });
 
     function logout() {
@@ -699,6 +748,19 @@ createApp({
       if (!t) return "";
       const s = String(t);
       return s.slice(0, 52) + (s.length > 52 ? "…" : "");
+    }
+    function customsBadge(s) {
+      if (!s) return "muted";
+      if (s === "已完成") return "pass";
+      if (s === "影子待回执") return "warn";
+      if (s === "已入队") return "muted";
+      return "fail";
+    }
+    function customsLabel(s) {
+      return s === "已完成" ? "正式完成" : s === "影子待回执" ? "影子待回执" : (s || "未申报");
+    }
+    function lastJobFor(blCode) {
+      return customsJobs.value.find((j) => j.bl_code === blCode) || null;
     }
     function clearFlash() { actionErr.value = ""; actionOk.value = ""; }
     function flashOk(m) { actionOk.value = m; actionErr.value = ""; }
@@ -804,8 +866,10 @@ createApp({
     async function releaseGate() {
       clearFlash();
       try {
-        await api.releaseGate(gateForm.value);
-        flashOk("已放行"); await refresh();
+        const r = await api.releaseGate(gateForm.value);
+        if (r.customs_complete) flashOk(`已放行 · 海关回执已到，正式完成`);
+        else flashOk(`已放行 · 海关回执缺失，仅影子待回执（未计入正式册）`);
+        await refresh();
       } catch (e) { flashErr(e); }
     }
     async function createSeal() {
@@ -844,20 +908,34 @@ createApp({
     }
     async function enqueueCustoms() {
       clearFlash();
-      try { await api.customsStub(customsForm.value); flashOk("海关空桩入队"); await refresh(); }
-      catch (e) { flashErr(e); }
+      try {
+        const r = await api.customsStub(customsForm.value);
+        flashOk(
+          r.receipt_ok
+            ? "海关空桩入队：回执已在列"
+            : "海关空桩入队：回执未到，不写正式完成"
+        );
+        receiptForm.value.job_id = r.id;
+        await refresh();
+      } catch (e) { flashErr(e); }
+    }
+    async function submitReceipt() {
+      clearFlash();
+      try {
+        const r = await api.customsReceipt(receiptForm.value);
+        flashOk(`回执已入列：${r.bl_code} → ${customsLabel(r.status)}`);
+        receiptForm.value.receipt_ref = "";
+        await refresh();
+      } catch (e) { flashErr(e); }
+    }
+    function pickJob(job) {
+      receiptForm.value.job_id = job.id;
     }
     async function enqueueCrane() {
       clearFlash();
       try { await api.craneStub(craneForm.value); flashOk("岸桥空桩入队"); await refresh(); }
       catch (e) { flashErr(e); }
     }
-
-    const viewMap = [
-      dashboardViewTemplate, bridgesViewTemplate, lanesViewTemplate, ticketsViewTemplate,
-      overloadViewTemplate, gateViewTemplate, sealViewTemplate, blViewTemplate,
-      lineageViewTemplate, reconcileViewTemplate, stubsViewTemplate,
-    ];
 
     onMounted(() => {
       if (token.value) refresh();
@@ -869,44 +947,45 @@ createApp({
       lineageEdges, customsJobs, craneJobs, bridgeDetail, ticketDetail,
       reconOne, reconAllItems, proofOne, reconCode, proofCode,
       bridgeForm, laneForm, ticketForm, overloadOpenForm, gateForm, sealForm,
-      blForm, lineageForm, customsForm, craneForm,
+      blForm, lineageForm, customsForm, receiptForm, craneForm,
       adjudicableTickets, releasableTickets, sealableTickets,
-      login, logout, refresh, viewMap,
-      fmtT, ticketClass, shortText,
+      login, logout, refresh,
+      fmtT, ticketClass, shortText, customsBadge, customsLabel, lastJobFor,
       createBridge, loadBridgeDetail, createLane, createTicket, loadTicketDetail, selectTicket,
       openOverload, closeOverload, releaseGate, createSeal, registerBl, addLineage,
-      loadReconcile, loadAllReconcile, loadProof, enqueueCustoms, enqueueCrane,
+      loadReconcile, loadAllReconcile, loadProof, enqueueCustoms, submitReceipt,
+      pickJob, enqueueCrane,
     };
   },
   template: `
-    <motion v-if="!token" class="login-hero">
-      <UploadLogin class="login-card">
+    <div v-if="!token" class="login-hero">
+      <div class="login-card">
         <h1>港口过磅闸口</h1>
         <p class="sub">过磅票入闸后裁定超重才放行，驳回进旁路挂起，闸代快照与提单册对账。</p>
         <label>账号</label><input v-model="username"/>
         <label>密码</label><input v-model="password" type="password"/>
         <button @click="login">登录</button>
         <p v-if="err" class="err">{{ err }}</p>
-      </UploadLogin>
-    </motion>
-    <motion v-else class="harbor-shell">
+      </div>
+    </div>
+    <div v-else class="harbor-shell">
       <header class="harbor-top">
-        <motion style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;width:100%">
-          <motion>
+        <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px;width:100%">
+          <div>
             <h1>港口过磅闸口</h1>
             <p class="tagline">数据工程 · 港区地磅闸口裁定</p>
-          </motion>
-          <motion class="stat-strip">
+          </div>
+          <div class="stat-strip">
             <span class="stat-pill">超重<strong>{{ dash.open_overloads ?? 0 }}</strong></span>
             <span class="stat-pill">旁路<strong>{{ dash.side_pending ?? 0 }}</strong></span>
             <span class="stat-pill">在港票<strong>{{ dash.tickets ?? 0 }}</strong></span>
-          </motion>
-          <motion class="top-actions">
+          </div>
+          <div class="top-actions">
             <span>{{ user }}</span>
             <button @click="refresh">刷新</button>
             <button @click="logout">退出</button>
-          </motion>
-        </motion>
+          </div>
+        </div>
       </header>
       <nav class="tab-strip">
         <button v-for="(n,i) in nav" :key="n" :class="{active: tab===i}" @click="tab=i">{{ n }}</button>
@@ -914,15 +993,22 @@ createApp({
       <main class="harbor-main">
         <p v-if="actionErr" class="action-err">{{ actionErr }}</p>
         <p v-if="actionOk" class="ok-msg">{{ actionOk }}</p>
-        <component :is="{ template: viewMap[tab] }" />
+        <div v-show="tab===0">${dashboardViewTemplate}</div>
+        <div v-show="tab===1">${bridgesViewTemplate}</div>
+        <div v-show="tab===2">${lanesViewTemplate}</div>
+        <div v-show="tab===3">${ticketsViewTemplate}</div>
+        <div v-show="tab===4">${overloadViewTemplate}</div>
+        <div v-show="tab===5">${gateViewTemplate}</div>
+        <div v-show="tab===6">${sealViewTemplate}</div>
+        <div v-show="tab===7">${blViewTemplate}</div>
+        <div v-show="tab===8">${lineageViewTemplate}</div>
+        <div v-show="tab===9">${reconcileViewTemplate}</div>
+        <div v-show="tab===10">${stubsViewTemplate}</div>
       </main>
-    </motion>
+    </div>
   `,
 }).mount("#app");
 """
-
-# Fix typos in APP_JS template - motion/UploadLogin should be div
-APP_JS = APP_JS.replace("<motion", "<div").replace("</motion>", "</div>").replace("UploadLogin", "div")
 
 LANES = r"""
 export const lanesViewTemplate = `
@@ -959,8 +1045,6 @@ export const lanesViewTemplate = `
   </table>
 </section>
 `;"""
-
-RECON = RECON.replace("<motion class", "<div class").replace("</motion>", "</div>")
 
 
 if __name__ == "__main__":
